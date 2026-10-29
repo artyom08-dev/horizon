@@ -23,13 +23,20 @@ impl Launcher {
 
     /// The section, when revealed or when one of its options is on.
     pub(super) fn dev_options_section(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if !self.dev_options && !self.settings.dev_offline {
+        if !self.dev_options && !self.settings.dev_offline && !self.settings.dev_download {
             return None;
         }
         let t = self.theme;
         let toggle = switch("dev-offline", self.settings.dev_offline, &t).on_click(cx.listener(
             |this, _: &ClickEvent, _, cx| {
                 this.settings.dev_offline = !this.settings.dev_offline;
+                this.settings.save();
+                cx.notify();
+            },
+        ));
+        let download_toggle = switch("dev-download", self.settings.dev_download, &t).on_click(cx.listener(
+            |this, _: &ClickEvent, _, cx| {
+                this.settings.dev_download = !this.settings.dev_download;
                 this.settings.save();
                 cx.notify();
             },
@@ -50,11 +57,18 @@ impl Launcher {
                         div()
                             .child(
                                 "Offline names play without a Microsoft account that owns the game. \
-                                 Minecraft still comes from your own install.",
+                                 Downloading without an account requires the separate option below.",
                             )
                             .into_any_element(),
                     ),
                     Some(toggle.into_any_element()),
+                    &t,
+                ))
+                .child(index_row(
+                    1,
+                    "Download without an account",
+                    Some(div().child("Download Minecraft files from Mojang without checking ownership. Offline play requires the separate option above.").into_any_element()),
+                    Some(download_toggle.into_any_element()),
                     &t,
                 )),
         )

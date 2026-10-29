@@ -2472,7 +2472,7 @@ impl Launcher {
             );
         match play_press(
             prepared || java.is_some(),
-            self.owner,
+            if self.settings.dev_download { Some(true) } else { self.owner },
             self.preparing || running,
         ) {
             PlayPress::Nothing => play = disabled(play),
@@ -2516,12 +2516,16 @@ impl Launcher {
         // Not prepared: an owner can have Horizon download Minecraft from Mojang; without an
         // owner there is nothing to play, so signing in comes first.
         let first = (!prepared && !self.preparing)
-            .then_some(self.owner_shown())
+            .then_some(if self.settings.dev_download { Some(true) } else { self.owner_shown() })
             .flatten();
         // No launcher folder with Minecraft on this computer: an owner needs none.
         let no_install = self.settings.minecraft_dir.is_none();
         let resources_value = match first {
             _ if self.preparing => tr("Preparing…").to_string(),
+            Some(true) if self.settings.dev_download => trf(
+                "Not prepared. Horizon can download Minecraft {version} from Mojang without an account (developer option).",
+                &[("version", &version)],
+            ),
             Some(true) if no_install => trf(
                 "Not prepared. Play downloads Minecraft {version} from Mojang for your account and prepares it.",
                 &[("version", &version)],
@@ -2604,7 +2608,9 @@ impl Launcher {
         let minecraft = self.settings.minecraft_dir.as_deref().map_or_else(
             || {
                 div()
-                    .child(if owner {
+                    .child(if self.settings.dev_download {
+                        "None needed: the developer download option is on."
+                    } else if owner {
                         tr("None needed: Horizon downloads Minecraft from Mojang for your account.")
                     } else {
                         tr("Not found. Choose the folder where your launcher keeps Minecraft.")

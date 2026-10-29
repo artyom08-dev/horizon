@@ -1280,6 +1280,9 @@ fn download_for_owner(
     fetch: sources::Fetch,
     log: &dyn Fn(String),
 ) -> Result<(), String> {
+    if Settings::load().dev_download {
+        return download_for(pins, dir, Err(account::NoOwner), false, true, fetch, log);
+    }
     let mut accounts = account::Accounts::load();
     // The strict gate, never `launch_for_game`: the developer option that lets offline names
     // play without an owner must not download the game for them.
@@ -1290,7 +1293,7 @@ fn download_for_owner(
         &mut accounts,
     );
     let _ = accounts.save();
-    download_for(pins, dir, pass, !accounts.accounts.is_empty(), fetch, log)
+    download_for(pins, dir, pass, !accounts.accounts.is_empty(), false, fetch, log)
 }
 
 /// Downloads Minecraft `id` (any version on Mojang's list, its version file's sha1 from it) into
@@ -1406,10 +1409,21 @@ fn download_for(
     dir: &Path,
     pass: Result<account::Launch, account::NoOwner>,
     signed_in: bool,
+    dev_download: bool,
     fetch: sources::Fetch,
     log: &dyn Fn(String),
 ) -> Result<(), String> {
     let v = &pins.version;
+    if dev_download {
+        log(format!("Developer option: downloading {v} from Mojang without an account"));
+        let os = match sources::Os::current() {
+            sources::Os::Linux => "linux",
+            sources::Os::MacOs => "osx",
+            sources::Os::Windows => "windows",
+        };
+        return mojang::download(pins, dir, os, 8, fetch, &mojang::CANCEL, log)
+            .map_err(|e| format!("\n  • Horizon tried to download {v} from Mojang, but: {e}"));
+    }
     match pass {
         Ok(account::Launch {
             owner: Some((owner, _)),
@@ -2984,6 +2998,8 @@ pub struct Settings {
     /// comes from the player's own install. Off by default, and absent from the file while off.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub dev_offline: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dev_download: bool,
 }
 
 impl Settings {
@@ -3086,7 +3102,16 @@ mod tests {
     /// account the services said owns the game: never without one, and never past the gate by
     /// the developer option (`Settings::dev_offline`), whose pass has no owner.
     #[test]
-    fn mojang_downloads_only_for_an_owner() {
+    fn developer_download_setting_defaults_off_and_round_trips() {
+        let settings = Settings::parse("{}");
+        assert!(!settings.dev_download);
+        let mut settings = settings;
+        settings.dev_download = true;
+        assert!(Settings::parse(&serde_json::to_string(&settings).unwrap()).dev_download);
+    }
+
+    #[test]
+    fn mojang_downloads_require_owner_unless_developer_option_is_on() {
         let dir = std::env::temp_dir().join(format!("horizon-owner-only-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let pins = sources::Pins::read(&serde_json::json!({ "minecraft": {
@@ -3108,10 +3133,13 @@ mod tests {
             (no_owner(), false),
             (no_owner(), true),
         ] {
-            assert!(download_for(&pins, &dir, pass, signed_in, &fetch, &log).is_err());
+            assert!(download_for(&pins, &dir, pass, signed_in, false, &fetch, &log).is_err());
         }
         assert!(asked.lock().unwrap().is_empty());
         assert!(!dir.exists());
+        assert!(download_for(&pins, &dir, Err(account::NoOwner), false, true, &fetch, &log).is_err());
+        assert!(!asked.lock().unwrap().is_empty());
+        asked.lock().unwrap().clear();
         // An owner: Mojang is asked (and the download fails here, without network).
         let owner = account::Account {
             uuid: "069a79f444e94726a5befca90e38aaf5".into(),
@@ -3127,7 +3155,7 @@ mod tests {
             owner: Some((owner, secrets)),
             ..Default::default()
         });
-        assert!(download_for(&pins, &dir, pass, true, &fetch, &log).is_err());
+        assert!(download_for(&pins, &dir, pass, true, false, &fetch, &log).is_err());
         assert!(!asked.lock().unwrap().is_empty());
         let _ = fs::remove_dir_all(&dir);
 
@@ -3157,7 +3185,7 @@ mod tests {
                     .map(move |_| name.as_str())
             })
             .collect();
-        assert_eq!(calls, ["backend.rs"]);
+        assert_eq!(calls, ["backend.rs", "backend.rs"]);
         let backend = &sources.iter().find(|(n, ..)| n == "backend.rs").unwrap().2;
         let body = |f: &str| {
             let start = backend.find(&format!("\nfn {f}(")).unwrap();
@@ -3167,7 +3195,7 @@ mod tests {
         assert!(body("download_for_owner").contains("account::launch("));
         assert!(!body("download_for_owner").contains("launch_for_game("));
         // `download_for` is defined once and called once, by `download_for_owner`.
-        assert_eq!(backend.matches("download_for(").count(), 2);
+        assert_eq!(backend.matches("download_for(").count(), 3);
         assert!(body("download_for_owner").contains("download_for("));
         for host in [
             "piston-data",
