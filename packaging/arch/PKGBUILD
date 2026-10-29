@@ -1,0 +1,67 @@
+pkgname=horizon-launcher-bin
+pkgver=0.2.0.r0.0
+pkgrel=1
+pkgdesc='Horizon launcher from the latest fork release'
+arch=('x86_64')
+url='https://github.com/artyom08-dev/horizon'
+license=('MIT' 'OFL-1.1')
+depends=('bash' 'glibc' 'gcc-libs' 'libxcb' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'vulkan-icd-loader' 'hicolor-icon-theme' 'xdg-utils')
+makedepends=('curl' 'python')
+optdepends=('jdk25-openjdk: Java 25 JDK for preparing game resources'
+            'python: preparation of older Horizon releases'
+            'vulkan-driver: Vulkan graphics driver'
+            'gnome-keyring: Microsoft sign-in'
+            'kwallet: alternative Secret Service provider')
+provides=('horizon-launcher')
+conflicts=('horizon-launcher' 'horizon-launcher-git')
+
+prepare() {
+    cd "$srcdir"
+    curl -fsSL 'https://api.github.com/repos/artyom08-dev/horizon/releases/latest' -o release.json
+    python - <<'PY'
+import json
+import re
+
+with open('release.json', encoding='utf-8') as f:
+    release = json.load(f)
+tag = release['tag_name']
+match = re.fullmatch(r'build-(\d+)-(\d+)', tag)
+if not match:
+    raise SystemExit('Latest release is not a launcher build')
+assets = [a for a in release['assets'] if a['name'] == 'horizon-launcher-linux-x86_64.tar.gz']
+if len(assets) != 1:
+    raise SystemExit('Linux launcher asset not found')
+asset = assets[0]
+expected_url = f'https://github.com/artyom08-dev/horizon/releases/download/{tag}/{asset["name"]}'
+if asset['browser_download_url'] != expected_url or not re.fullmatch(r'sha256:[0-9a-f]{64}', asset.get('digest') or ''):
+    raise SystemExit('Invalid asset URL or SHA-256 digest')
+with open('asset-url', 'w', encoding='utf-8') as f:
+    f.write(expected_url)
+with open('asset.sha256', 'w', encoding='utf-8') as f:
+    f.write(asset['digest'][7:] + '  horizon-launcher-linux-x86_64.tar.gz\n')
+with open('package-version', 'w', encoding='utf-8') as f:
+    f.write(f'0.2.0.r{match[1]}.{match[2]}')
+PY
+    curl -fsSL "$(cat asset-url)" -o horizon-launcher-linux-x86_64.tar.gz
+    sha256sum -c asset.sha256
+    mkdir -p package
+    tar -xzf horizon-launcher-linux-x86_64.tar.gz -C package
+}
+
+pkgver() {
+    cat "$srcdir/package-version"
+}
+
+package() {
+    cd "$srcdir/package"
+    install -Dm755 horizon-launcher "$pkgdir/usr/lib/horizon-launcher/horizon-launcher"
+    install -dm755 "$pkgdir/usr/bin"
+    printf '%s\n' '#!/bin/sh' 'export HORIZON_LAUNCHER_NO_SELF_UPDATE=1' 'exec /usr/lib/horizon-launcher/horizon-launcher "$@"' > "$pkgdir/usr/bin/horizon-launcher"
+    chmod 755 "$pkgdir/usr/bin/horizon-launcher"
+    install -Dm644 horizon-launcher.desktop "$pkgdir/usr/share/applications/horizon-launcher.desktop"
+    install -Dm644 horizon.desktop "$pkgdir/usr/share/applications/horizon.desktop"
+    install -Dm644 horizon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/horizon.svg"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 OFL-Geist.txt "$pkgdir/usr/share/licenses/$pkgname/OFL-Geist.txt"
+    install -Dm644 OFL-PixelifySans.txt "$pkgdir/usr/share/licenses/$pkgname/OFL-PixelifySans.txt"
+}
